@@ -20,10 +20,10 @@ public class PowerShellService {
     
     private static final Logger logger = LoggerFactory.getLogger(PowerShellService.class);
     
-    @Value("${script.add-node-path:scripts/add_node.ps1}")
+    @Value("${script.add-node-path:./add_node.ps1}")
     private String scriptPath;
     
-    @Value("${corda.project.root:/home/aa/corda_new/demo}")  // Ubuntu路径
+    @Value("${corda.project.root:./../scripts}")
     private String cordaProjectRoot;
     
     // 判断操作系统
@@ -36,12 +36,86 @@ public class PowerShellService {
         return isWindows() ? "powershell.exe" : "pwsh";
     }
 
+    // 获取项目的绝对根路径
+    private String getProjectRootPath() {
+        try {
+            // 获取当前工作目录
+            String currentDir = System.getProperty("user.dir");
+            logger.info("当前工作目录: {}", currentDir);
+            
+            // 如果是相对路径，转换为绝对路径
+            File baseDir = new File(currentDir);
+            File projectRoot = resolveRelativePath(baseDir, cordaProjectRoot);
+            
+            logger.info("解析后的Corda项目路径: {}", projectRoot.getAbsolutePath());
+            logger.info("路径是否存在: {}", projectRoot.exists());
+            
+            return projectRoot.getAbsolutePath();
+        } catch (Exception e) {
+            logger.warn("获取项目根路径失败，使用配置路径: {}", cordaProjectRoot, e);
+            return cordaProjectRoot;
+        }
+    }
+    
+    // 解析相对路径
+    private File resolveRelativePath(File baseDir, String path) {
+        if (path == null || path.trim().isEmpty()) {
+            return baseDir;
+        }
+        
+        if (path.startsWith(".")) {
+            // 处理相对路径
+            File resolved = new File(baseDir, path);
+            
+            // 如果不存在，尝试从项目的上级目录查找
+            if (!resolved.exists() && path.startsWith("./..")) {
+                // 尝试从更上级的目录查找
+                File parent = baseDir.getParentFile();
+                if (parent != null) {
+                    // 移除开头的"./../"
+                    String remainingPath = path.substring(4);
+                    return new File(parent, remainingPath);
+                }
+            }
+            return resolved;
+        } else {
+            return new File(path);
+        }
+    }
+
+    // 获取脚本的绝对路径
+    private String getScriptAbsolutePath() {
+        try {
+            String projectRoot = getProjectRootPath();
+            File projectRootDir = new File(projectRoot);
+            
+            // 如果scriptPath是相对路径
+            if (scriptPath.startsWith(".")) {
+                File scriptFile = new File(projectRootDir, scriptPath.substring(1));
+                logger.info("脚本路径: {}", scriptFile.getAbsolutePath());
+                logger.info("脚本是否存在: {}", scriptFile.exists());
+                return scriptFile.getAbsolutePath();
+            } else {
+                logger.info("脚本路径: {}", scriptPath);
+                return scriptPath;
+            }
+        } catch (Exception e) {
+            logger.warn("获取脚本路径失败，使用配置路径: {}", scriptPath, e);
+            return scriptPath;
+        }
+    }
+    
     // 在项目根执行 gradlew clean deployNodes
     public ProcessResult executeGradleDeploy() {
-        File projectRootDir = new File(cordaProjectRoot);
+        String projectRoot = getProjectRootPath();
+        File projectRootDir = new File(projectRoot);
+        
+        logger.info("执行Gradle部署，项目目录: {}", projectRootDir.getAbsolutePath());
+        logger.info("目录是否存在: {}", projectRootDir.exists());
+        
         if (!projectRootDir.exists()) {
-            logger.error("Corda 项目根目录不存在: {}", cordaProjectRoot);
-            return new ProcessResult(-1, "", "Corda 项目根目录不存在: " + cordaProjectRoot, false);
+            logger.error("Corda 项目根目录不存在: {}", projectRoot);
+            return new ProcessResult(-1, "", "Corda 项目根目录不存在: " + projectRoot, false);
         }
 
         try {
@@ -86,18 +160,26 @@ public class PowerShellService {
 
     public List<String> getNodeNames() {
         List<String> nodes = new ArrayList<>();
-        File projectRoot = new File(cordaProjectRoot);
-        File buildGradle = new File(projectRoot, "build.gradle");
+        String projectRoot = getProjectRootPath();
+        File projectRootDir = new File(projectRoot);
+        File buildGradle = new File(projectRootDir, "build.gradle");
+        
+        logger.info("查找节点名称，build.gradle路径: {}", buildGradle.getAbsolutePath());
+        logger.info("build.gradle是否存在: {}", buildGradle.exists());
+        
         if (!buildGradle.exists()) {
             logger.warn("未找到 build.gradle 文件: {}", buildGradle.getAbsolutePath());
             return nodes;
         }
+        
         try {
             String content = Files.readString(buildGradle.toPath(), StandardCharsets.UTF_8);
             Pattern p = Pattern.compile("name\\s+\"([^\"]+)\"");
             Matcher m = p.matcher(content);
             while (m.find()) {
-                nodes.add(m.group(1));
+                String nodeName = m.group(1);
+                logger.info("找到节点: {}", nodeName);
+                nodes.add(nodeName);
             }
         } catch (IOException e) {
             logger.error("读取 build.gradle 时出错", e);
@@ -108,24 +190,31 @@ public class PowerShellService {
     public ProcessResult executePowerShellScript(String arguments) {
         try {
             // 使用配置的 Corda 项目根目录
-            File projectRootDir = new File(cordaProjectRoot);
+            String projectRoot = getProjectRootPath();
+            File projectRootDir = new File(projectRoot);
+            
+            logger.info("执行PowerShell脚本，项目目录: {}", projectRoot);
+            logger.info("目录是否存在: {}", projectRootDir.exists());
+            
             if (!projectRootDir.exists()) {
-                logger.error("Corda 项目根目录不存在: {}", cordaProjectRoot);
-                return new ProcessResult(-1, "", "Corda 项目根目录不存在: " + cordaProjectRoot, false);
+                logger.error("Corda 项目根目录不存在: {}", projectRoot);
+                return new ProcessResult(-1, "", "Corda 项目根目录不存在: " + projectRoot, false);
             }
             
-            // 构建完整的脚本路径
-            String fullScriptPath = Paths.get(cordaProjectRoot, scriptPath).toString();
-            
-            // 检查脚本文件是否存在
+            // 获取完整的脚本路径
+            String fullScriptPath = getScriptAbsolutePath();
             File scriptFile = new File(fullScriptPath);
+            
+            logger.info("脚本路径: {}", fullScriptPath);
+            logger.info("脚本是否存在: {}", scriptFile.exists());
+            
             if (!scriptFile.exists()) {
                 logger.error("PowerShell 脚本不存在: {}", fullScriptPath);
                 return new ProcessResult(-1, "", "脚本文件不存在: " + fullScriptPath, false);
             }
             
             logger.info("执行 PowerShell 脚本: {}", fullScriptPath);
-            logger.info("工作目录: {}", cordaProjectRoot);
+            logger.info("工作目录: {}", projectRoot);
             logger.info("参数: {}", arguments);
             logger.info("使用 PowerShell 命令: {}", getPowerShellCommand());
             
@@ -208,36 +297,50 @@ public class PowerShellService {
     
     // 验证配置
     public boolean validateCordaProject() {
-        File projectRoot = new File(cordaProjectRoot);
-        if (!projectRoot.exists()) {
-            logger.error("Corda 项目根目录不存在: {}", cordaProjectRoot);
+        String projectRoot = getProjectRootPath();
+        File projectRootDir = new File(projectRoot);
+        
+        logger.info("验证Corda项目，路径: {}", projectRoot);
+        logger.info("目录是否存在: {}", projectRootDir.exists());
+        
+        if (!projectRootDir.exists()) {
+            logger.error("Corda 项目根目录不存在: {}", projectRoot);
             return false;
         }
         
-        File buildGradle = new File(projectRoot, "build.gradle");
+        File buildGradle = new File(projectRootDir, "build.gradle");
+        logger.info("build.gradle路径: {}", buildGradle.getAbsolutePath());
+        logger.info("build.gradle是否存在: {}", buildGradle.exists());
+        
         if (!buildGradle.exists()) {
-            logger.error("在 Corda 项目根目录中找不到 build.gradle 文件: {}", cordaProjectRoot);
+            logger.error("在 Corda 项目根目录中找不到 build.gradle 文件: {}", projectRoot);
             return false;
         }
         
-        File scriptFile = new File(projectRoot, scriptPath);
+        String scriptPath = getScriptAbsolutePath();
+        File scriptFile = new File(scriptPath);
+        logger.info("脚本路径: {}", scriptPath);
+        logger.info("脚本是否存在: {}", scriptFile.exists());
+        
         if (!scriptFile.exists()) {
             logger.error("PowerShell 脚本不存在: {}", scriptFile.getAbsolutePath());
             return false;
-        }    
-        logger.info("Corda 项目验证成功: {}", cordaProjectRoot);
+        }
+        
+        logger.info("Corda 项目验证成功: {}", projectRoot);
         return true;
     }
     
     // 获取 Corda 项目信息
     public CordaProjectInfo getCordaProjectInfo() {
-        File projectRoot = new File(cordaProjectRoot);
-        File buildGradle = new File(projectRoot, "build.gradle");
-        File scriptFile = new File(projectRoot, scriptPath);
+        String projectRoot = getProjectRootPath();
+        File projectRootDir = new File(projectRoot);
+        File buildGradle = new File(projectRootDir, "build.gradle");
+        File scriptFile = new File(getScriptAbsolutePath());
         
         return new CordaProjectInfo(
-            cordaProjectRoot,
-            projectRoot.exists(),
+            projectRoot,
+            projectRootDir.exists(),
             buildGradle.exists(),
             scriptFile.exists(),
             scriptFile.getAbsolutePath()
@@ -246,10 +349,12 @@ public class PowerShellService {
     
     // 启动所有节点 - Ubuntu 版本
     public ProcessResult executeRunnodesScript() {
-        File projectRootDir = new File(cordaProjectRoot);
+        String projectRoot = getProjectRootPath();
+        File projectRootDir = new File(projectRoot);
+        
         if (!projectRootDir.exists()) {
-            logger.error("Corda 项目根目录不存在: {}", cordaProjectRoot);
-            return new ProcessResult(-1, "", "Corda 项目根目录不存在: " + cordaProjectRoot, false);
+            logger.error("Corda 项目根目录不存在: {}", projectRoot);
+            return new ProcessResult(-1, "", "Corda 项目根目录不存在: " + projectRoot, false);
         }
 
         // Ubuntu 下使用 runnodes 脚本（无扩展名）
@@ -302,10 +407,12 @@ public class PowerShellService {
 
     // 启动指定节点 - Ubuntu 版本
     public ProcessResult startNode(String nodeName) {
-        File projectRootDir = new File(cordaProjectRoot);
+        String projectRoot = getProjectRootPath();
+        File projectRootDir = new File(projectRoot);
+        
         if (!projectRootDir.exists()) {
-            logger.error("Corda 项目根目录不存在: {}", cordaProjectRoot);
-            return new ProcessResult(-1, "", "Corda 项目根目录不存在: " + cordaProjectRoot, false);
+            logger.error("Corda 项目根目录不存在: {}", projectRoot);
+            return new ProcessResult(-1, "", "Corda 项目根目录不存在: " + projectRoot, false);
         }
 
         File nodeDir = new File(projectRootDir, "build/nodes/" + nodeName);
@@ -358,10 +465,12 @@ public class PowerShellService {
     
     // 停止指定节点 - Ubuntu 版本
     public ProcessResult stopNode(String nodeName) {
-        File projectRootDir = new File(cordaProjectRoot);
+        String projectRoot = getProjectRootPath();
+        File projectRootDir = new File(projectRoot);
+        
         if (!projectRootDir.exists()) {
-            logger.error("Corda 项目根目录不存在: {}", cordaProjectRoot);
-            return new ProcessResult(-1, "", "Corda 项目根目录不存在: " + cordaProjectRoot, false);
+            logger.error("Corda 项目根目录不存在: {}", projectRoot);
+            return new ProcessResult(-1, "", "Corda 项目根目录不存在: " + projectRoot, false);
         }
 
         File nodeDir = new File(projectRootDir, "build/nodes/" + nodeName);

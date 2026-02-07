@@ -1,5 +1,4 @@
-
-
+#!/usr/bin/env pwsh
 [CmdletBinding(DefaultParameterSetName="Help")]
 param(
     [Parameter(Mandatory=$true, ParameterSetName="AddNode")]
@@ -48,7 +47,7 @@ function Write-Warning { param([string]$message) Write-Host "${YELLOW}[WARNING]$
 function Write-Error { param([string]$message) Write-Host "${RED}[ERROR]${NC} $message" }
 
 function Show-Usage {
-    Write-Host "用法: add_node.ps1 [选项]"
+    Write-Host "用法: ./add_node.ps1 [选项]"
     Write-Host ""
     Write-Host "添加节点模式:"
     Write-Host "  -NodeName      (必需) 节点名称 (例如: 'O=PartyE,L=Tokyo,C=JP')"
@@ -68,20 +67,20 @@ function Show-Usage {
     Write-Host ""
     Write-Host "示例:"
     Write-Host "  # 添加节点 - 手动指定所有参数"
-    Write-Host "  .\add_node.ps1 -NodeName 'O=PartyE,L=Tokyo,C=JP' -P2PPort 10012 -RPCPort 10013 -AdminPort 10053 -DbName corda_party_e -DbUser user_e"
+    Write-Host "  ./add_node.ps1 -NodeName 'O=PartyE,L=Tokyo,C=JP' -P2PPort 10012 -RPCPort 10013 -AdminPort 10053 -DbName corda_party_e -DbUser user_e"
     Write-Host ""
     Write-Host "  # 添加节点 - 自动分配端口和数据库配置"
-    Write-Host "  .\add_node.ps1 -NodeName 'O=PartyE,L=Tokyo,C=JP' -AutoPorts -AutoDb"
+    Write-Host "  ./add_node.ps1 -NodeName 'O=PartyE,L=Tokyo,C=JP' -AutoPorts -AutoDb"
     Write-Host ""
     Write-Host "  # 删除节点"
-    Write-Host "  .\add_node.ps1 -RemoveNode 'O=PartyE,L=Tokyo,C=JP'"
+    Write-Host "  ./add_node.ps1 -RemoveNode 'O=PartyE,L=Tokyo,C=JP'"
     Write-Host ""
     Write-Host "快速参考:" -ForegroundColor Green
     Write-Host "  # 快速添加节点"
-    Write-Host "  .\add_node.ps1 -NodeName 'O=PartyE,L=Tokyo,C=JP' -AutoPorts -AutoDb"
+    Write-Host "  ./add_node.ps1 -NodeName 'O=PartyE,L=Tokyo,C=JP' -AutoPorts -AutoDb"
     Write-Host ""
     Write-Host "  # 快速删除节点"
-    Write-Host "  .\add_node.ps1 -RemoveNode 'O=PartyE,L=Tokyo,C=JP'"
+    Write-Host "  ./add_node.ps1 -RemoveNode 'O=PartyE,L=Tokyo,C=JP'"
     Write-Host ""
 }
 
@@ -151,14 +150,25 @@ function Test-NodeToRemoveExists
     return $false
 }
 
-#端口检测函数
+#端口检测函数 - Ubuntu兼容版本
 function Test-PortInUse 
 {
     param([int]$Port)
     try 
     {
-        $connection = Test-NetConnection -ComputerName "127.0.0.1" -Port $Port -WarningAction SilentlyContinue -InformationLevel Quiet
-        return $connection.TcpTestSucceeded
+        # 使用 netstat 命令检查端口占用
+        $result = netstat -tuln 2>$null | Select-String ":$Port\s"
+        if ($result) {
+            return $true
+        }
+        
+        # 使用 lsof 命令作为备选检查
+        $result = lsof -i:$Port 2>$null
+        if ($result) {
+            return $true
+        }
+        
+        return $false
     } 
     catch 
     {
@@ -190,10 +200,10 @@ function Auto-AssignPorts
     $p2pMatches = [regex]::Matches($content, 'p2pPort\s+(\d+)')
     $allP2pPorts = $p2pMatches | ForEach-Object { [int]$_.Groups[1].Value }
     $allRpcPorts = @()
-    $rpcMatches = [regex]::Matches($content, 'address\("localhost:(\d+)"\)')
+    $rpcMatches = [regex]::Matches($content, 'address\("172\.18\.44\.66:(\d+)"\)')
     $allRpcPorts = $rpcMatches | ForEach-Object { [int]$_.Groups[1].Value }
     $allAdminPorts = @()
-    $adminMatches = [regex]::Matches($content, 'adminAddress\("localhost:(\d+)"\)')
+    $adminMatches = [regex]::Matches($content, 'adminAddress\("172\.18\.44\.66:(\d+)"\)')
     $allAdminPorts = $adminMatches | ForEach-Object { [int]$_.Groups[1].Value }
     # 所有已使用的端口
     $allUsedPorts = $allP2pPorts + $allRpcPorts + $allAdminPorts
@@ -319,14 +329,14 @@ function Modify-BuildGradle
         name "$NodeName"
         p2pPort $P2PPort
         rpcSettings {
-            address("localhost:$RPCPort")
-            adminAddress("localhost:$AdminPort")
+            address("172.18.44.66:$RPCPort")
+            adminAddress("172.18.44.66:$AdminPort")
         }
         rpcUsers = [[ user: "user1", "password": "test", "permissions": ["ALL"]]]
         extraConfig = [
              dataSourceProperties: [
                  dataSourceClassName: "org.postgresql.ds.PGSimpleDataSource",
-                 "dataSource.url": "jdbc:postgresql://localhost:5432/$DbName",
+                 "dataSource.url": "jdbc:postgresql://172.18.44.66:5432/$DbName",
                  "dataSource.user": "$DbUser",
                  "dataSource.password": "123456"
              ]
@@ -412,7 +422,7 @@ function Update-ClientsBuildGradle {
 task $taskName(type: JavaExec, dependsOn: assemble) {
     classpath = sourceSets.main.runtimeClasspath
     main = 'net.corda.samples.example.webserver.Starter'
-    args '--server.port=$serverPort', '--config.rpc.host=localhost', '--config.rpc.port=$RPCPort', '--config.rpc.username=user1', '--config.rpc.password=test'
+    args '--server.port=$serverPort', '--config.rpc.host=172.18.44.66', '--config.rpc.port=$RPCPort', '--config.rpc.username=user1', '--config.rpc.password=test'
 }
 "@
     
@@ -842,7 +852,6 @@ function Remove-NodeFromCopyDrivers
 }
 
 # --- 主逻辑 ---
-# --- 主逻辑 ---
 function Main 
 {
     try {
@@ -948,7 +957,7 @@ function Main
         Write-Success "工作目录已准备就绪: $(Get-Location)"
         Write-Info "检查必要文件是否存在..."
         
-        $requiredFiles = @("build.gradle", "settings.gradle", "gradlew", "gradlew.bat")
+        $requiredFiles = @("build.gradle", "settings.gradle", "gradlew")
         $missingFiles = @()
         
         foreach ($file in $requiredFiles) {
@@ -996,7 +1005,7 @@ function Main
             Write-Host ""
             Write-Warning "下一步操作:"
             Write-Host "  1. 检查 'build.gradle' 和 'setup_corda_db.sql' 文件的更改是否正确。"
-            Write-Host "  2. 重新部署节点: ./gradlew.bat clean deployNodes"
+            Write-Host "  2. 重新部署节点: ./gradlew clean deployNodes"
             Write-Host "  3. 如果需要，手动清理 PostgreSQL 中的数据库和用户"
         } 
         catch 
@@ -1032,8 +1041,8 @@ function Main
             Write-Warning "下一步操作:"
             Write-Host "  1. 检查 'build.gradle' 和 'setup_corda_db.sql' 文件的更改是否正确。"
             Write-Host "  2. 如果使用 PostgreSQL, 请先运行数据库脚本以创建新用户和数据库。"
-            Write-Host "  3. 在项目根目录运行: ./gradlew.bat clean deployNodes"
-            Write-Host "  4. 启动所有节点: ./build/nodes/runnodes.bat"
+            Write-Host "  3. 在项目根目录运行: ./gradlew clean deployNodes"
+            Write-Host "  4. 启动所有节点: ./build/nodes/runnodes.sh"
         } 
         catch 
         {

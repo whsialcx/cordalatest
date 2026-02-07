@@ -74,7 +74,7 @@ public class NodeController
             
             // 修复：使用双引号构建参数
             StringBuilder arguments = new StringBuilder();
-            arguments.append("-NodeName \"").append(request.getNodeName()).append("\"");
+            arguments.append("-NodeName ").append(request.getNodeName());
             
             if (request.isAutoPorts()) {
                 arguments.append(" -AutoPorts");
@@ -91,9 +91,9 @@ public class NodeController
                 arguments.append(" -AutoDb");
             } else {
                 if (request.getDbName() != null) 
-                    arguments.append(" -DbName \"").append(request.getDbName()).append("\"");
-                if (request.getDbUser() != null) 
-                    arguments.append(" -DbUser \"").append(request.getDbUser()).append("\"");
+    			arguments.append(" -DbName ").append(request.getDbName()); // 去掉 \"
+		if (request.getDbUser() != null) 
+    			arguments.append(" -DbUser ").append(request.getDbUser()); // 去掉 \"
             }
             
             // 执行脚本
@@ -171,7 +171,7 @@ public class NodeController
             }
             
             // 修复：使用双引号构建参数，确保特殊字符正确处理
-            String arguments = "-RemoveNode \"" + request.getNodeName() + "\"";
+            String arguments = "-RemoveNode " + request.getNodeName();
             
             // 执行
             PowerShellService.ProcessResult result = 
