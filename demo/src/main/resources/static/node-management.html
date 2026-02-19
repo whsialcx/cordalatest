@@ -247,7 +247,7 @@
         <div class="section">
             <h2 class="section-title">添加节点</h2>
             <div class="form-group">
-                <label for="nodeName">节点名称:</label>
+                <label for="nodeName">节点名称 (X.500格式):</label>
                 <input type="text" id="nodeName" placeholder="例如: O=PartyE,L=Tokyo,C=JP">
             </div>
             
@@ -298,7 +298,7 @@
         <div class="section">
             <h2 class="section-title">删除节点</h2>
             <div class="form-group">
-                <label for="removeNodeName">节点名称:</label>
+                <label for="removeNodeName">节点名称 (X.500格式):</label>
                 <input type="text" id="removeNodeName" placeholder="输入要删除的节点名称">
             </div>
             <button class="btn-danger" onclick="removeNode()">删除节点</button>
@@ -338,7 +338,9 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        displayNodesList(data.nodes, data.count);
+                        // 优先使用后端返回的详细对象列表 nodeDetails
+                        const listData = (data.nodeDetails && data.nodeDetails.length > 0) ? data.nodeDetails : data.nodes;
+                        displayNodesList(listData, data.count);
                     } else {
                         nodesListDiv.innerHTML = `<div class="empty-message">加载失败: ${data.message}</div>`;
                     }
@@ -348,7 +350,7 @@
                 });
         }
         
-        // 显示节点列表（移除状态列）
+        // 显示节点列表（包含 baseUrl 列）
         function displayNodesList(nodes, count) {
             const nodesListDiv = document.getElementById('nodesList');
             
@@ -359,20 +361,31 @@
             
             let html = `<p><strong>节点总数: ${count}</strong></p>`;
             html += '<table class="nodes-table">';
-            html += '<thead><tr><th>序号</th><th>节点名称</th><th>目录名</th><th>操作</th></tr></thead>';
+            html += '<thead><tr><th>序号</th><th>节点名称 (X.500)</th><th>服务地址 (Spring Boot)</th><th>操作</th></tr></thead>';
             html += '<tbody>';
             
             nodes.forEach((node, index) => {
-                let nodeDir = extractNodeDir(node);
-                const badge = getNodeBadge(node);
+                // 【核心修复点】: 处理数据格式差异。如果 node 是字符串直接用；如果是对象，优先读 name，兜底读 nodeName
+                let nodeName = '';
+                let baseUrl = '未分配';
+                
+                if (typeof node === 'string') {
+                    nodeName = node;
+                } else {
+                    nodeName = node.name || node.nodeName || '未知节点';
+                    baseUrl = node.baseUrl || '未分配';
+                }
+                
+                const badge = getNodeBadge(nodeName);
+                const nodeDir = extractNodeDir(nodeName);
                 
                 html += `<tr>
                     <td>${index + 1}</td>
-                    <td>${node} ${badge}</td>
-                    <td>${nodeDir}</td>
+                    <td>${nodeName} ${badge}</td>
+                    <td><code style="background:#e8f4fd;padding:3px 6px;border-radius:4px;color:#0366d6;">${baseUrl}</code></td>
                     <td>
                         <div class="action-buttons">
-                            <button class="btn-secondary" onclick="setRemoveNodeName('${node}')">删除</button>
+                            <button class="btn-secondary" onclick="setRemoveNodeName('${nodeName}')">删除</button>
                             <button class="btn-info" onclick="setStartNodeName('${nodeDir}')">启动</button>
                             <button class="btn-danger" onclick="stopNodeByName('${nodeDir}', this)">终止</button>
                         </div>
@@ -397,9 +410,8 @@
             return badges[orgName] || '';
         }
         
-        // 从节点名称中提取目录名
+        // 从节点名称中提取目录名 (组织名)
         function extractNodeDir(nodeName) {
-            // 从 "O=PartyA,L=London,C=GB" 提取 "PartyA"
             const match = nodeName.match(/O=([^,]+)/);
             return match ? match[1] : nodeName;
         }
@@ -654,7 +666,7 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    showResult('节点添加成功！输出: ' + data.output, true);
+                    showResult(`节点添加成功！服务地址: ${data.baseUrl || '未知'}`, true);
                     // 清空表单
                     document.getElementById('nodeName').value = '';
                     document.getElementById('p2pPort').value = '';

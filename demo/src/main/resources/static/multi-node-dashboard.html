@@ -295,10 +295,7 @@
                 <div class="form-group">
                     <label for="nodeSelect">选择节点:</label>
                     <select id="nodeSelect">
-                        <option value="partyA">节点A (PartyA)</option>
-                        <option value="partyB">节点B (PartyB)</option>
-                        <option value="partyC">节点C (PartyC)</option>
-                        <option value="partyE">节点E (PartyE)</option>
+                        <!-- 动态生成选项 -->
                     </select>
                 </div>
                 <div class="action-buttons">
@@ -391,22 +388,15 @@
         
         <footer>
             <p>Corda节点管理面板 &copy; 2023 | 后端API地址: http://localhost:8080</p>
-            <p>当前选中的节点: <span id="currentNodeDisplay">节点A (partyA)</span></p>
+            <p>当前选中的节点: <span id="currentNodeDisplay">--</span></p>
         </footer>
     </div>
 
     <script>
         // 后端API基础URL
         const API_BASE_URL = 'http://localhost:8080/api/corda';
-        let currentNode = 'partyA'; // 默认选中的节点
-        
-        // 节点配置
-        const nodes = {
-            partyA: { name: '节点A (PartyA)', url: 'http://localhost:50005' },
-            partyB: { name: '节点B (PartyB)', url: 'http://localhost:50006' },
-            partyC: { name: '节点C (PartyC)', url: 'http://localhost:50008' },
-            partyE: { name: '节点E (PartyE)', url: 'http://localhost:50009' }
-        };
+        let currentNode = null; // 当前选中的节点ID (组织名，如 PartyA)
+        let nodesList = []; // 存储从数据库获取的节点 { nodeName, baseUrl, shortName }
         
         // DOM元素
         const nodeBadges = document.getElementById('nodeBadges');
@@ -415,16 +405,86 @@
         const logContainer = document.getElementById('logContainer');
         const currentNodeDisplay = document.getElementById('currentNodeDisplay');
         
+        // 从节点管理数据库加载节点列表
+        async function loadNodesFromDatabase() {
+            try {
+                const response = await fetch('/api/nodes/list');
+                const data = await response.json();
+                
+                // 【核心修复点】: 优先使用 data.nodeDetails，并读取 node.name
+                if (data.success && data.nodeDetails && data.nodeDetails.length > 0) {
+                    nodesList = data.nodeDetails.map(node => {
+                        const realName = node.name || node.nodeName || String(node);
+                        const shortName = extractShortName(realName);
+                        return {
+                            nodeName: realName,
+                            baseUrl: node.baseUrl || '未知',
+                            shortName: shortName
+                        };
+                    });
+                } else if (data.success && data.nodes && data.nodes.length > 0) {
+                    // 兼容旧的单纯字符串数组格式
+                    nodesList = data.nodes.map(nodeStr => {
+                        return {
+                            nodeName: nodeStr,
+                            baseUrl: '未知',
+                            shortName: extractShortName(nodeStr)
+                        };
+                    });
+                } else {
+                    // 如果没有节点，使用默认节点作为后备
+                    nodesList = [
+                        { nodeName: 'O=PartyA,L=London,C=GB', baseUrl: 'http://localhost:50005', shortName: 'PartyA' },
+                        { nodeName: 'O=PartyB,L=New York,C=US', baseUrl: 'http://localhost:50006', shortName: 'PartyB' },
+                        { nodeName: 'O=PartyC,L=Paris,C=FR', baseUrl: 'http://localhost:50008', shortName: 'PartyC' },
+                        { nodeName: 'O=PartyE,L=Tokyo,C=JP', baseUrl: 'http://localhost:50009', shortName: 'PartyE' }
+                    ];
+                    addLog('使用默认节点列表（数据库无节点）', 'warn');
+                }
+            } catch (error) {
+                addLog('加载节点列表失败: ' + error.message, 'error');
+                // 加载失败时使用默认节点
+                nodesList = [
+                    { nodeName: 'O=PartyA,L=London,C=GB', baseUrl: 'http://localhost:50005', shortName: 'PartyA' },
+                    { nodeName: 'O=PartyB,L=New York,C=US', baseUrl: 'http://localhost:50006', shortName: 'PartyB' }
+                ];
+            }
+            // 初始化节点标签和选择框
+            initNodeBadges();
+            initNodeSelect();
+            // 默认选中第一个节点
+            if (nodesList.length > 0) {
+                selectNode(nodesList[0].shortName);
+            }
+        }
+        
+        // 从 X.500 名称中提取组织名
+        function extractShortName(nodeName) {
+            const match = nodeName.match(/O=([^,]+)/);
+            return match ? match[1] : nodeName;
+        }
+        
         // 初始化节点标签
         function initNodeBadges() {
             nodeBadges.innerHTML = '';
-            Object.keys(nodes).forEach(nodeId => {
+            nodesList.forEach(node => {
                 const badge = document.createElement('div');
-                badge.className = `node-badge ${nodeId === currentNode ? 'active' : ''}`;
-                badge.textContent = nodes[nodeId].name;
-                badge.dataset.node = nodeId;
-                badge.addEventListener('click', () => selectNode(nodeId));
+                badge.className = `node-badge ${node.shortName === currentNode ? 'active' : ''}`;
+                badge.textContent = node.shortName;
+                badge.dataset.node = node.shortName;
+                badge.addEventListener('click', () => selectNode(node.shortName));
                 nodeBadges.appendChild(badge);
+            });
+        }
+        
+        // 初始化节点下拉选择框
+        function initNodeSelect() {
+            nodeSelect.innerHTML = '';
+            nodesList.forEach(node => {
+                const option = document.createElement('option');
+                option.value = node.shortName;
+                option.textContent = `${node.shortName} (${node.baseUrl})`;
+                nodeSelect.appendChild(option);
             });
         }
         
@@ -432,14 +492,15 @@
         function selectNode(nodeId) {
             currentNode = nodeId;
             nodeSelect.value = nodeId;
-            currentNodeDisplay.textContent = nodes[nodeId].name;
+            const selectedNode = nodesList.find(n => n.shortName === nodeId);
+            currentNodeDisplay.textContent = selectedNode ? `${selectedNode.shortName} (${selectedNode.baseUrl})` : nodeId;
             
             // 更新节点标签的激活状态
             document.querySelectorAll('.node-badge').forEach(badge => {
                 badge.classList.toggle('active', badge.dataset.node === nodeId);
             });
             
-            addLog(`切换到节点: ${nodes[nodeId].name}`, 'info');
+            addLog(`切换到节点: ${nodeId}`, 'info');
         }
         
         // 添加日志
@@ -472,9 +533,15 @@
             responseArea.textContent = formattedData;
         }
         
-        // API调用函数
+        // API调用函数 (使用 currentNode)
         async function callAPI(endpoint, method = 'GET', body = null) {
-            const url = `${API_BASE_URL}${endpoint}`;
+            if (!currentNode) {
+                addLog('请先选择一个节点', 'error');
+                throw new Error('未选择节点');
+            }
+            // 替换 URL 中的节点占位符，例如 /partyA/info 替换为 /{currentNode}/info
+            // 这里假设 endpoint 以 '/' 开头，且包含节点名称占位符，但当前代码中直接使用 `${currentNode}` 拼接入路径
+            const url = `${API_BASE_URL}/${currentNode}${endpoint}`; // 注意：endpoint 应以 '/' 开头，如 '/info'
             const options = {
                 method,
                 headers: {
@@ -506,7 +573,7 @@
         // 节点相关API调用
         async function testAllNodes() {
             try {
-                const data = await callAPI('/test-all-nodes');
+                const data = await callAPI('/test-all-nodes'); // 注意这个接口可能不需要节点参数？实际需调整
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -515,7 +582,7 @@
         
         async function getNodeInfo() {
             try {
-                const data = await callAPI(`/${currentNode}/info`);
+                const data = await callAPI('/info');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -532,7 +599,7 @@
             }
             
             try {
-                const data = await callAPI(`/${currentNode}/create-iou?iouValue=${iouValue}&partyName=${encodeURIComponent(partyName)}`, 'POST');
+                const data = await callAPI(`/create-iou?iouValue=${iouValue}&partyName=${encodeURIComponent(partyName)}`, 'POST');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -541,7 +608,7 @@
         
         async function getIOUs() {
             try {
-                const data = await callAPI(`/${currentNode}/ious`);
+                const data = await callAPI('/ious');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -559,7 +626,7 @@
             }
             
             try {
-                const data = await callAPI(`/${currentNode}/record-temperature?temperature=${temperature}&isCritical=${isCritical}&receiver=${encodeURIComponent(receiver)}`, 'POST');
+                const data = await callAPI(`/record-temperature?temperature=${temperature}&isCritical=${isCritical}&receiver=${encodeURIComponent(receiver)}`, 'POST');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -568,7 +635,7 @@
         
         async function queryTemperatures() {
             try {
-                const data = await callAPI(`/${currentNode}/temperatures`);
+                const data = await callAPI('/temperatures');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -577,7 +644,7 @@
         
         async function getReceivers() {
             try {
-                const data = await callAPI(`/${currentNode}/receivers`);
+                const data = await callAPI('/receivers');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -586,7 +653,7 @@
         
         async function getNodeStatus() {
             try {
-                const data = await callAPI(`/${currentNode}/status`);
+                const data = await callAPI('/status');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -595,7 +662,7 @@
         
         async function getNodePeers() {
             try {
-                const data = await callAPI(`/${currentNode}/peers`);
+                const data = await callAPI('/peers');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -604,7 +671,7 @@
         
         async function getMyIOUs() {
             try {
-                const data = await callAPI(`/${currentNode}/my-ious`);
+                const data = await callAPI('/my-ious');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -615,17 +682,17 @@
             try {
                 // 遍历所有节点获取接收方
                 const results = {};
-                for (const nodeId of Object.keys(nodes)) {
+                for (const node of nodesList) {
                     try {
-                        const response = await fetch(`${API_BASE_URL}/${nodeId}/receivers`);
+                        const response = await fetch(`${API_BASE_URL}/${node.shortName}/receivers`);
                         if (response.ok) {
                             const data = await response.json();
-                            results[nodeId] = data;
+                            results[node.shortName] = data;
                         } else {
-                            results[nodeId] = { error: `HTTP ${response.status}` };
+                            results[node.shortName] = { error: `HTTP ${response.status}` };
                         }
                     } catch (error) {
-                        results[nodeId] = { error: error.message };
+                        results[node.shortName] = { error: error.message };
                     }
                 }
                 showResponse(results);
@@ -639,24 +706,24 @@
             try {
                 // 遍历所有节点检查健康状态
                 const results = {};
-                for (const nodeId of Object.keys(nodes)) {
+                for (const node of nodesList) {
                     try {
-                        const response = await fetch(`${API_BASE_URL}/${nodeId}/info`);
+                        const response = await fetch(`${API_BASE_URL}/${node.shortName}/info`);
                         if (response.ok) {
                             const data = await response.json();
-                            results[nodeId] = {
+                            results[node.shortName] = {
                                 healthy: true,
                                 status: data.status || '未知',
                                 serverTime: data.serverTime || '未知'
                             };
                         } else {
-                            results[nodeId] = {
+                            results[node.shortName] = {
                                 healthy: false,
                                 error: `HTTP ${response.status}`
                             };
                         }
                     } catch (error) {
-                        results[nodeId] = {
+                        results[node.shortName] = {
                             healthy: false,
                             error: error.message
                         };
@@ -672,7 +739,7 @@
         // 其他API调用函数
         async function getServerTime() {
             try {
-                const data = await callAPI(`/${currentNode}/servertime`);
+                const data = await callAPI('/servertime');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -681,7 +748,7 @@
         
         async function getNotaries() {
             try {
-                const data = await callAPI(`/${currentNode}/notaries`);
+                const data = await callAPI('/notaries');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -690,7 +757,7 @@
         
         async function getFlows() {
             try {
-                const data = await callAPI(`/${currentNode}/flows`);
+                const data = await callAPI('/flows');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -699,7 +766,7 @@
         
         async function getStates() {
             try {
-                const data = await callAPI(`/${currentNode}/states`);
+                const data = await callAPI('/states');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -708,7 +775,7 @@
         
         async function getAddresses() {
             try {
-                const data = await callAPI(`/${currentNode}/addresses`);
+                const data = await callAPI('/addresses');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -717,7 +784,7 @@
         
         async function getPlatformVersion() {
             try {
-                const data = await callAPI(`/${currentNode}/platformversion`);
+                const data = await callAPI('/platformversion');
                 showResponse(data);
             } catch (error) {
                 showResponse({ error: error.message });
@@ -770,12 +837,11 @@
         }
         
         // 页面初始化
-        function init() {
-            initNodeBadges();
+        async function init() {
+            await loadNodesFromDatabase();
             initEventListeners();
             addLog('Corda节点管理面板已初始化', 'success');
             addLog(`当前后端API: ${API_BASE_URL}`, 'info');
-            addLog(`默认节点: ${nodes[currentNode].name}`, 'info');
         }
         
         // 页面加载完成后初始化
