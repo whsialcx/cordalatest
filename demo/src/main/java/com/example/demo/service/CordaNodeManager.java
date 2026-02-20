@@ -63,6 +63,26 @@ public class CordaNodeManager {
 
     @Transactional
     public void removeNode(String name) {
-        nodeRepository.deleteByName(name);
+        // 1. 先尝试删除完全匹配的完整名称（针对后来通过页面动态添加并存入全名的节点）
+        nodeRepository.findByName(name).ifPresent(node -> {
+            nodeRepository.delete(node);
+        });
+
+        // 2. 如果传入的是 X.500 格式 (如 O=PartyE,L=Tokyo,C=JP)，提取短名称去数据库匹配
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("O=([^,]+)").matcher(name);
+        if (matcher.find()) {
+            String shortName = matcher.group(1); // 提取出 PartyE
+            
+            // 尝试删除大写开头的短名称 (如 PartyE)
+            nodeRepository.findByName(shortName).ifPresent(node -> {
+                nodeRepository.delete(node);
+            });
+            
+            // 尝试删除小写开头的短名称 (如 partyE，这是系统初始化时默认存入的格式)
+            String lowerFirstShortName = shortName.substring(0, 1).toLowerCase() + shortName.substring(1);
+            nodeRepository.findByName(lowerFirstShortName).ifPresent(node -> {
+                nodeRepository.delete(node);
+            });
+        }
     }
 }
