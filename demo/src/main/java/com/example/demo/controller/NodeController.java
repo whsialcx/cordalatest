@@ -3,11 +3,9 @@ package com.example.demo.controller;
 import com.example.demo.service.PowerShellService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
-import com.example.demo.service.CordaNodeManager;
+
 import java.util.HashMap;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 
 @RestController
@@ -16,9 +14,6 @@ public class NodeController
 {
     @Autowired
     private PowerShellService powerShellService;
-
-    @Autowired
-    private CordaNodeManager nodeManager;
     
     //验证 Corda 项目配置
     @GetMapping("/validate")
@@ -38,28 +33,27 @@ public class NodeController
         return response;
     }
 
-    @GetMapping("/list")
-    public Map<String, Object> listNodes() {
+    @GetMapping("/list")//显示所有节点
+    public Map<String, Object> listNodes() 
+    {
         Map<String, Object> response = new HashMap<>();
-        try {
-            // 1. 直接从数据库拉取节点名称数组 (耗时从数百毫秒降至几毫秒)
-            String[] nodeNamesArray = nodeManager.getNodeNames();
-            java.util.List<String> nodes = java.util.Arrays.asList(nodeNamesArray);
-            
-            // 2. 获取完整的节点对象列表（如果你后续前端想要直接拿到 baseUrl，可以用这个）
-            // 需要在开头引入：import com.example.demo.entity.CordaNode;
-            java.util.List<com.example.demo.entity.CordaNode> nodeDetails = nodeManager.getAllNodeDetails();
-
+        try 
+        {
+            if (!powerShellService.validateCordaProject()) 
+            {
+                response.put("success", false);
+                response.put("message", "Corda 项目配置验证失败，请检查配置");
+                return response;
+            }
+            java.util.List<String> nodes = powerShellService.getNodeNames();
             response.put("success", true);
-            // 保持向前兼容，维持原有的 nodes 字段结构
-            response.put("nodes", nodes); 
-            // 额外返回详细数据，供前端展示更多信息（如 API 端口等）
-            response.put("nodeDetails", nodeDetails);
+            response.put("nodes", nodes);
             response.put("count", nodes.size());
-            
-        } catch (Exception e) {
+        } 
+        catch (Exception e) 
+        {
             response.put("success", false);
-            response.put("message", "从数据库获取节点列表时发生错误: " + e.getMessage());
+            response.put("message", "获取节点列表时发生错误: " + e.getMessage());
         }
         return response;
     }
@@ -69,6 +63,7 @@ public class NodeController
     public Map<String, Object> addNode(@RequestBody NodeRequest request) {
         Map<String, Object> response = new HashMap<>();
         try {
+            // 先验证 Corda 项目配置
             if (!powerShellService.validateCordaProject()) {
                 response.put("success", false);
                 response.put("message", "Corda 项目配置验证失败，请检查配置");
@@ -77,6 +72,7 @@ public class NodeController
                 return response;
             }
             
+            // 修复：使用双引号构建参数
             StringBuilder arguments = new StringBuilder();
             arguments.append("-NodeName \"").append(request.getNodeName()).append("\"");
             
@@ -100,25 +96,15 @@ public class NodeController
                     arguments.append(" -DbUser \"").append(request.getDbUser()).append("\"");
             }
             
+            // 执行脚本
             PowerShellService.ProcessResult result = 
                 powerShellService.executePowerShellScript(arguments.toString());
             
+            // 其余代码保持不变...
             if (result.isSuccess() && result.getExitCode() == 0) {
-                // 1. 从 PowerShell 脚本输出中解析分配的服务器端口
-                String output = result.getOutput();
-                int serverPort = extractServerPort(output);
-                
-                // 2. 拼接完整的 baseUrl (假设你的节点服务器运行在 localhost)
-                // 如果你的应用已经在 Linux 服务器上，这里可能需要换成具体的服务器 IP 或使用 127.0.0.1
-                String baseUrl = "http://localhost:" + serverPort;
-                
-                // 3. 将节点信息同步保存到 PostgreSQL 数据库
-                nodeManager.saveNode(request.getNodeName(), baseUrl);
-
                 response.put("success", true);
-                response.put("message", "节点添加成功，并已同步至数据库");
-                response.put("baseUrl", baseUrl); // 返回给前端参考
-                response.put("output", output);
+                response.put("message", "节点添加成功");
+                response.put("output", result.getOutput());
             } else {
                 response.put("success", false);
                 response.put("message", "节点添加失败");
@@ -184,39 +170,16 @@ public class NodeController
                 return response;
             }
             
-            String requestedName = request.getNodeName();
-            String fullNodeNameToRemove = requestedName; // 默认使用传过来的名字
+            // 修复：使用双引号构建参数，确保特殊字符正确处理
+            String arguments = "-RemoveNode \"" + request.getNodeName() + "\"";
             
-            // 【核心补全逻辑】：如果传过来的名字不包含 "="，说明是短名称 (如 partyA 或 PartyA)
-            if (!requestedName.contains("=")) {
-                // 获取 build.gradle 中所有的全名
-                java.util.List<String> allFullNames = powerShellService.getNodeNames();
-                for (String fullName : allFullNames) {
-                    // 使用正则提取全名中的组织名，例如从 O=PartyA,L=London 提取 PartyA
-                    Matcher m = Pattern.compile("O=([^,]+)").matcher(fullName);
-                    if (m.find()) {
-                        String orgName = m.group(1);
-                        // 忽略大小写匹配 (partyA 等于 PartyA)
-                        if (orgName.equalsIgnoreCase(requestedName)) {
-                            fullNodeNameToRemove = fullName; // 找到全名，进行替换
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            String arguments = "-RemoveNode " + fullNodeNameToRemove;
-            
+            // 执行
             PowerShellService.ProcessResult result = 
                 powerShellService.executePowerShellScript(arguments);
             
             if (result.isSuccess() && result.getExitCode() == 0) {
-                // 脚本执行成功后，从 PostgreSQL 数据库中同步删除该节点记录
-                // 这里传入原始的 request.getNodeName() (如 partyA)，让 JPA 删掉数据库里的短名记录
-                nodeManager.removeNode(request.getNodeName());
-
                 response.put("success", true);
-                response.put("message", "节点删除成功，并已从数据库中移除");
+                response.put("message", "节点删除成功");
                 response.put("output", result.getOutput());
             } else {
                 response.put("success", false);
@@ -230,6 +193,7 @@ public class NodeController
             response.put("success", false);
             response.put("message", "执行脚本时发生错误: " + e.getMessage());
         }
+        
         return response;
     }
 
@@ -342,17 +306,6 @@ public class NodeController
             response.put("message", "停止节点时发生错误: " + e.getMessage());
         }
         return response;
-    }
-
-    private int extractServerPort(String output) {
-        // 匹配 add_node.ps1 中的输出格式: "服务器端口=50008"
-        Pattern pattern = Pattern.compile("服务器端口=(\\d+)");
-        Matcher matcher = pattern.matcher(output);
-        if (matcher.find()) {
-            return Integer.parseInt(matcher.group(1));
-        }
-        // 如果没有匹配到（比如手动指定了端口没有走自动分配逻辑），可以返回一个默认占位端口，或抛出异常
-        return 50008; 
     }
     
     public static class StartNodeRequest 
