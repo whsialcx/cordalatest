@@ -184,13 +184,35 @@ public class NodeController
                 return response;
             }
             
-            String arguments = "-RemoveNode " + request.getNodeName();
+            String requestedName = request.getNodeName();
+            String fullNodeNameToRemove = requestedName; // 默认使用传过来的名字
+            
+            // 【核心补全逻辑】：如果传过来的名字不包含 "="，说明是短名称 (如 partyA 或 PartyA)
+            if (!requestedName.contains("=")) {
+                // 获取 build.gradle 中所有的全名
+                java.util.List<String> allFullNames = powerShellService.getNodeNames();
+                for (String fullName : allFullNames) {
+                    // 使用正则提取全名中的组织名，例如从 O=PartyA,L=London 提取 PartyA
+                    Matcher m = Pattern.compile("O=([^,]+)").matcher(fullName);
+                    if (m.find()) {
+                        String orgName = m.group(1);
+                        // 忽略大小写匹配 (partyA 等于 PartyA)
+                        if (orgName.equalsIgnoreCase(requestedName)) {
+                            fullNodeNameToRemove = fullName; // 找到全名，进行替换
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            String arguments = "-RemoveNode " + fullNodeNameToRemove;
             
             PowerShellService.ProcessResult result = 
                 powerShellService.executePowerShellScript(arguments);
             
             if (result.isSuccess() && result.getExitCode() == 0) {
                 // 脚本执行成功后，从 PostgreSQL 数据库中同步删除该节点记录
+                // 这里传入原始的 request.getNodeName() (如 partyA)，让 JPA 删掉数据库里的短名记录
                 nodeManager.removeNode(request.getNodeName());
 
                 response.put("success", true);
